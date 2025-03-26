@@ -23,9 +23,11 @@ AVRPlayer::AVRPlayer()
 	VRCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("VRCamera"));
 	VRCamera->SetupAttachment(RootComponent);
 
+
 	/* Input Mappig Context */ 
 	ConstructorHelpers::FObjectFinder<UInputMappingContext> tmpIMC(TEXT("/Script/EnhancedInput.InputMappingContext'/Game/Inputs/IMC_VRInput.IMC_VRInput'"));
 	if (tmpIMC.Succeeded()) IMC_VRInput = tmpIMC.Object;
+
 
 	/* Input Actions */ 
 	ConstructorHelpers::FObjectFinder<UInputAction> tmpIAMove(TEXT("/Script/EnhancedInput.InputAction'/Game/Inputs/IA_VRMove.IA_VRMove'"));
@@ -38,7 +40,11 @@ AVRPlayer::AVRPlayer()
 	if (tmpIATeleport.Succeeded()) IA_VRTeleport = tmpIATeleport.Object;
 
 	ConstructorHelpers::FObjectFinder<UInputAction> tmpIAFire(TEXT("/Script/EnhancedInput.InputAction'/Game/Inputs/IA_VRFire.IA_VRFire'"));
-	if (tmpIATeleport.Succeeded()) IA_Fire = tmpIAFire.Object;
+	if (tmpIATeleport.Succeeded()) IA_VRFire = tmpIAFire.Object;
+
+	ConstructorHelpers::FObjectFinder<UInputAction> tmpIAGrab(TEXT("/Script/EnhancedInput.InputAction'/Game/Inputs/IA_VRGrab.IA_VRGrab'"));
+	if (tmpIAGrab.Succeeded()) IA_VRGrab = tmpIAGrab.Object;
+
 
 	/* Motion Controller */
 	LeftHand = CreateDefaultSubobject<UMotionControllerComponent>(TEXT("LeftHand"));
@@ -48,6 +54,11 @@ AVRPlayer::AVRPlayer()
 	RightHand = CreateDefaultSubobject<UMotionControllerComponent>(TEXT("RightHand"));
 	RightHand->SetupAttachment(RootComponent);
 	RightHand->SetTrackingMotionSource(TEXT("Right"));
+
+	RightAim = CreateDefaultSubobject<UMotionControllerComponent>(TEXT("RightAim"));
+	RightAim->SetupAttachment(RootComponent);
+	RightAim->SetTrackingMotionSource(TEXT("RightAim"));
+
 
 	/* Teleport Circle */
 	// TeleportCircle = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("TeleportCircle"));
@@ -60,6 +71,12 @@ AVRPlayer::AVRPlayer()
 
 	// TIPS) string 데이터를 int형으로 바꾼 게 FName -> 그래서 FString이 FName보다 빠르다
 	// 해시키 형태로 저장 - Look Up table
+
+	/* Crosshair */
+	CrosshairComp = CreateDefaultSubobject<UChildActorComponent>(TEXT("CrosshairComp"));
+	CrosshairComp->SetupAttachment(RootComponent);
+	ConstructorHelpers::FClassFinder<AActor> tmpCrosshair(TEXT("/Script/Engine.Blueprint'/Game/Blueprints/BP_Crosshair.BP_Crosshair'_C"));
+	if(tmpCrosshair.Succeeded()) CrosshairComp->SetChildActorClass(tmpCrosshair.Class);
 }
 
 
@@ -75,6 +92,8 @@ void AVRPlayer::BeginPlay()
 void AVRPlayer::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	DrawCrosshair();
 
 	// 텔레포트 활성화 시
 	if (bTeleporting == true)
@@ -112,14 +131,18 @@ void AVRPlayer::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 	if (inputSystem)
 	{
 		inputSystem->BindAction(IA_VRMove, ETriggerEvent::Triggered, this, &AVRPlayer::Move);
-		//inputSystem->BindAction(IA_VRMouse, ETriggerEvent::Triggered, this, &AVRPlayer::Turn);
+		inputSystem->BindAction(IA_VRMouse, ETriggerEvent::Triggered, this, &AVRPlayer::Turn);
 
 		// Teleport
 		inputSystem->BindAction(IA_VRTeleport, ETriggerEvent::Started, this, &AVRPlayer::TeleportStart);
 		inputSystem->BindAction(IA_VRTeleport, ETriggerEvent::Completed, this, &AVRPlayer::TeleportEnd);
 
 		// Fire
-		inputSystem->BindAction(IA_Fire, ETriggerEvent::Started, this, &AVRPlayer::FireInput);
+		inputSystem->BindAction(IA_VRFire, ETriggerEvent::Started, this, &AVRPlayer::FireInput);
+
+		// Grab
+		inputSystem->BindAction(IA_VRGrab, ETriggerEvent::Started, this, &AVRPlayer::TryGrab);
+		inputSystem->BindAction(IA_VRGrab, ETriggerEvent::Completed, this, &AVRPlayer::TryUnGrab);
 	}
 
 	/*
@@ -376,7 +399,169 @@ void AVRPlayer::DoWarp()
 	), 0.02f, true);
 }
 
+//bool AVRPlayer::PerformLineTrace(FVector InStartPos, FVector InEndPos, FHitResult& InHitResult)
+//{
+//	FVector startPos = RightHand->GetComponentLocation();
+//	FVector endPos = startPos + RightHand->GetForwardVector() * 100;
+//	FHitResult hitInfo;
+//	FCollisionQueryParams params;
+//	params.AddIgnoredActor(this);
+//
+//	bool bHit = GetWorld()->LineTraceSingleByChannel(hitInfo, startPos, endPos, ECC_Visibility, params);
+//}
+
 void AVRPlayer::FireInput(const FInputActionValue& InValues)
+{
+	FVector startPos = RightAim->GetComponentLocation();
+	FVector endPos = startPos + RightAim->GetForwardVector() * 100;
+	FHitResult hitInfo;
+	FCollisionQueryParams params;
+	params.AddIgnoredActor(this);
+
+	bool bHit = GetWorld()->LineTraceSingleByChannel(hitInfo, startPos, endPos, ECC_Visibility, params);
+
+	if (bHit)
+	{
+		// 부딪힌 녀셕이 물리 기능이 활성화되어 있으면 날려보내자
+		auto hitComp = hitInfo.GetComponent();
+		if (hitComp && hitComp->IsSimulatingPhysics())
+			hitComp->AddImpulseAtLocation( RightAim->GetForwardVector() * 1000, hitInfo.Location );
+	}
+
+}
+
+// crosshair 그리기
+void AVRPlayer::DrawCrosshair()
+{
+	FVector startPos = RightAim->GetComponentLocation();
+	FVector endPos = startPos + RightAim->GetForwardVector() * 100;
+	FHitResult hitInfo;
+	FCollisionQueryParams params;
+	params.AddIgnoredActor(this);
+
+	DrawDebugLine(GetWorld(), startPos, endPos, FColor::Magenta);
+
+	bool bHit = GetWorld()->LineTraceSingleByChannel(hitInfo, startPos, endPos, ECC_Visibility, params);
+
+	float distance = 0;
+
+	// 부딪혔을 경우
+	if (bHit)
+	{
+		CrosshairComp->SetWorldLocation(hitInfo.Location);
+		distance = FVector::Distance(VRCamera->GetComponentLocation(), hitInfo.Location);	// Crosshair : 내 눈에서 바라보니까
+	}
+
+	// 그렇지 않을 경우
+	else 
+	{
+		CrosshairComp->SetWorldLocation(endPos);
+		distance = FVector::Distance(VRCamera->GetComponentLocation(), endPos);
+	}
+
+	// distance 값을 이용하여 크기 설정을 해준다
+	// 최소 값은 1, 최대는 위에서 구한 값
+
+	distance = FMath::Max(1, distance);
+	CrosshairComp->SetWorldScale3D(FVector(distance));
+
+	// 빌보딩 : 카메라쪽으로 바라보게 한다
+	FVector direction = CrosshairComp->GetComponentLocation() - VRCamera->GetComponentLocation();
+	CrosshairComp->SetWorldRotation(direction.Rotation());
+}
+
+// 일정 범위 안에 있는 물체를 잡고 싶다
+// 필요 속성 : 잡을 범위
+void AVRPlayer::TryGrab(const FInputActionValue& InValues)
+{
+	// 이미 잡고 있을 때는 그만 잡게 한다
+
+
+	FCollisionQueryParams params;
+	params.AddIgnoredActor(this);
+
+	FVector handPos = RightHand->GetComponentLocation();
+	TArray<FOverlapResult> hitObjects;
+
+	bool bHit = GetWorld()->OverlapMultiByChannel(hitObjects, handPos, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(GrabRadius), params);
+
+	// 충돌한 물체가 없으면 아무 처리하지 않는다
+	if(!bHit) return;
+
+	// 가장 가까운 물체를 검출하자
+	int closest = -1;
+
+	// 손과 가장 가까운 물체를 찾는다
+	for (int i = 0; i < hitObjects.Num(); i++)
+	{
+		// 물체 던지기를 하고 싶다
+		// 물리가 활성화되어 있는 물체만 검출
+		auto hitComp = hitObjects[i].GetComponent();
+
+		if(hitComp->IsSimulatingPhysics() == false) continue;
+
+		if (closest == -1)
+		{
+			closest = i;
+		}
+		// 물체를 잡고 있는 상태로 설정한다
+		bIsGrabbing = true;
+
+		// 현재 가장 손과 가까운 위치를 찾는다
+		FVector closestPos = hitObjects[closest].GetActor()->GetActorLocation();
+		float closestDistance = FVector::Distance(closestPos, handPos);
+
+		// 다음 물체와의 거리
+		FVector nextPos = hitObjects[closest].GetActor()->GetActorLocation();
+		float nextDistance = FVector::Distance(nextPos, handPos);
+
+		// 다음 물체가 더 손과 가까우면
+		// 가장 가까운 물체 인덱스 교체
+		if(nextDistance < closestDistance)
+			closest = i;
+
+	}
+
+	// 물체를 잡았다면
+	if (bIsGrabbing)
+	{
+		GrabbedObject = hitObjects[closest].GetComponent();
+
+		// 붙이기 전에 물리 기능을 꺼준다
+		GrabbedObject->SetSimulatePhysics(false);
+
+		// 충돌 처리도 꺼준다
+		GrabbedObject->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+		// 물체의 위치를 손 위치로 바꿔준다
+		hitObjects[closest].GetActor()->SetActorLocation(handPos);
+
+		// 손에 붙여준다
+		GrabbedObject->AttachToComponent(RightHand, FAttachmentTransformRules::KeepWorldTransform);
+
+		UE_LOG(LogTemp, Warning, TEXT(">>>>> Grab"));
+	}
+}
+
+void AVRPlayer::TryUnGrab(const FInputActionValue& InValues)
+{
+	// 물체를 잡고 있지 않다면 아무 처리하지 않는다
+	if(bIsGrabbing == false) return;
+
+	// 잡고 있지 않음을 명시한다
+	bIsGrabbing = false;
+
+	// 물체를 잡고 있다면 손에 붙어 있는 물체를 떼어준다
+	GrabbedObject->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+
+	// 물리 기능 활성환
+	GrabbedObject->SetSimulatePhysics(true);
+
+	// 충돌체 활성화
+	GrabbedObject->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+}
+
+void AVRPlayer::Grabbing()
 {
 	
 }

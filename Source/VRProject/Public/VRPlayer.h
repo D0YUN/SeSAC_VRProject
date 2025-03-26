@@ -28,8 +28,12 @@ public:
 	// Motion Controller 등록
 	UPROPERTY(VisibleAnywhere, Category = "MotionController")
 	class UMotionControllerComponent* LeftHand;
+
 	UPROPERTY(VisibleAnywhere, Category = "MotionController")
 	class UMotionControllerComponent* RightHand;
+
+	UPROPERTY(VisibleAnywhere, Category = "MotionController")
+	class UMotionControllerComponent* RightAim;
 
 public:
 	// IMC
@@ -145,8 +149,39 @@ private:
 	/* 총 쏘기 */
 public:
 	UPROPERTY(EditDefaultsOnly, Category = "Input")
-	class UInputAction* IA_Fire;
+	class UInputAction* IA_VRFire;
+
+	// bool PerformLineTrace(FVector InStartPos, FVector InEndPos, FHitResult& InHitResult);
+
 	void FireInput(const struct FInputActionValue& InValues);
+
+	UPROPERTY(VisibleAnywhere)
+	class UChildActorComponent* CrosshairComp;
+
+	// crosshair 그리기
+	void DrawCrosshair();
+
+	/* 잡기 */
+public:
+	UPROPERTY(EditDefaultsOnly, Category = "Input")
+	class UInputAction* IA_VRGrab;
+
+	// 물체를 잡고 있는지 여부
+	bool bIsGrabbing = false;
+
+	// 필요 속성 : 잡을 범위
+	UPROPERTY(EditAnywhere, Category = "Grab")
+	float GrabRadius = 100;
+
+	// 잡은 물체를 기억할 변수
+	UPROPERTY()
+	class UPrimitiveComponent* GrabbedObject;
+
+	void TryGrab(const struct FInputActionValue& InValues);
+	void TryUnGrab(const struct FInputActionValue& InValues);
+
+	// 물체를 잡은 상태로 컨트롤하기
+	void Grabbing();
 };
 
 /* meta = (AllowPrivateAccess=true)
