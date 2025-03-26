@@ -11,6 +11,7 @@
 #include "../../../../../../../Source/Runtime/Engine/Classes/Components/CapsuleComponent.h"
 #include "../../../../../../../Source/Runtime/Engine/Public/TimerManager.h"
 #include "../../../../../../../Source/Runtime/Engine/Classes/Camera/CameraComponent.h"
+#include "HeadMountedDisplayFunctionLibrary.h"
 
 
 // 정적 로딩 - 컴파일 시 로딩
@@ -85,6 +86,13 @@ void AVRPlayer::BeginPlay()
 	Super::BeginPlay();
 
 	ResetTeleport();
+
+	// HDM가 연결되어 있으면 HMD의 Tracking 위치를 조정해보자
+	if (UHeadMountedDisplayFunctionLibrary::IsHeadMountedDisplayEnabled())
+	{
+		UHeadMountedDisplayFunctionLibrary::SetTrackingOrigin(EHMDTrackingOrigin::Stage);
+		// UHeadMountedDisplayFunctionLibrary::ResetOrientationAndPosition();
+	}
 }
 
 
@@ -94,6 +102,12 @@ void AVRPlayer::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 
 	DrawCrosshair();
+
+	// 던지기
+	Grabbing();
+
+	DrawDebugRemoteGrab();
+
 
 	// 텔레포트 활성화 시
 	if (bTeleporting == true)
@@ -474,8 +488,12 @@ void AVRPlayer::DrawCrosshair()
 // 필요 속성 : 잡을 범위
 void AVRPlayer::TryGrab(const FInputActionValue& InValues)
 {
-	// 이미 잡고 있을 때는 그만 잡게 한다
-
+	// 원러기 물체 잡기
+	if (bIsRemoteGrab)
+	{
+		RemoteGrab();
+		return;
+	}
 
 	FCollisionQueryParams params;
 	params.AddIgnoredActor(this);
@@ -539,6 +557,10 @@ void AVRPlayer::TryGrab(const FInputActionValue& InValues)
 		// 손에 붙여준다
 		GrabbedObject->AttachToComponent(RightHand, FAttachmentTransformRules::KeepWorldTransform);
 
+		// 던지기를 위한 초기값 설정을 해준다
+		PrePos = RightHand->GetComponentLocation();
+		PreRot = RightHand->GetComponentQuat();
+
 		UE_LOG(LogTemp, Warning, TEXT(">>>>> Grab"));
 	}
 }
@@ -559,9 +581,132 @@ void AVRPlayer::TryUnGrab(const FInputActionValue& InValues)
 
 	// 충돌체 활성화
 	GrabbedObject->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+
+	// 던진다
+	GrabbedObject->AddImpulse(ThrowDirection * ThrowPower, NAME_None, true);
+
+	// 회전시킨다
+	// d(delta) : 변화량 , @ : 세타 (라고 치자), dt : delta time
+	// 각속도 = ( 1 / dt) * d@ axis(: 쿼터니언이 갖고 있는 축)
+	float angle;
+	FVector axis;
+
+	// 쿼터니언에서 축과 회전 각도를 가져온다
+	DeltaRotation.ToAxisAndAngle(axis, angle);
+
+	FVector angularVelocity = ( 1.0f / GetWorld()->DeltaTimeSeconds ) * angle * axis;
+
+	/* 각속도 넣어주기 */
+	// 방법1) 토크(회전값)을 직접 넣어줄 때
+	// GrabbedObject->AddTorqueInRadians(angularVelocity * ToquePower);
+
+	// 방법2) 물리에 각속도 넣기
+	GrabbedObject->SetPhysicsAngularVelocityInRadians(angularVelocity, true);
+
+	// 아무것도 잡고 있지 않다고 명시한다
+	GrabbedObject = nullptr;
 }
 
+// 던질 방향과 회전값 구하기
+// 이전 위치 -> 현재 위치 둘 간의 차를 이용해 방향/회전을 구한다
 void AVRPlayer::Grabbing()
 {
-	
+	// 잡은 게 없으면 return
+	if(bIsGrabbing == false) return;
+
+	// 던질 방향을 구한다
+	ThrowDirection = RightHand->GetComponentLocation() - PrePos;
+
+	// 회전 변화량을 구한다
+	// 공식
+	// angle1 = Q1, angle2 = Q2
+	// angle1 + angle2 = Q1 * Q2 // 회전의 더하기는 곱하기를 사용한다
+	// -angle2(방향바꾸기) = Q2.Inverse()
+	// angle2 - angle1 = angle2 + (-angle1) = Q2 * Q1.Inverse()
+	DeltaRotation = RightHand->GetComponentQuat() * PreRot.Inverse();
+
+	PrePos = RightHand->GetComponentLocation();
+	PreRot = RightHand->GetComponentQuat();
+}
+
+void AVRPlayer::RemoteGrab()
+{
+	// 충돌 체크
+	FCollisionQueryParams params;
+	params.AddIgnoredActor(this);
+	params.AddIgnoredComponent(RightHand);
+
+	FVector handPos = RightAim->GetComponentLocation();
+	FVector endPos = handPos +RightAim->GetForwardVector() * 2000;
+
+	FHitResult hitResult;
+	bool bHit = GetWorld()->SweepSingleByChannel(hitResult, handPos, endPos, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(20), params);
+
+	if (bHit && hitResult.GetComponent()->IsSimulatingPhysics())
+	{
+		// 1. 잡은 상태로 전환
+		bIsGrabbing = true;
+
+		// 2. 잡은 물체를 기억
+		GrabbedObject = hitResult.GetComponent();
+
+		// 3. 물리 기능 비활성화
+		GrabbedObject->SetSimulatePhysics(false);
+
+		// 4. 충돌 비활성화
+		GrabbedObject->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+		// 5. 컴포넌트 손에 붙이기
+		GrabbedObject->AttachToComponent(RightHand, FAttachmentTransformRules::KeepWorldTransform);
+
+		// 물체가 끌려오도록 타이머를 돌리자
+		auto remoteGrabFunc = [this]()
+			{
+				// 잡은 물체가 없으면 타이머 종료
+				// 물체가 나에게 오는 와중에 놓는 경우도 고려해서 이 위치에 검출 코드 작성
+				if (GrabbedObject == nullptr)
+				{
+					GetWorldTimerManager().ClearTimer(GrabHandle);
+					return;
+				}
+
+				FVector pos = GrabbedObject->GetComponentLocation();
+				pos = FMath::Lerp(pos, RightHand->GetComponentLocation(), 20 * GetWorld()->DeltaTimeSeconds);
+
+				GrabbedObject->SetWorldLocation(pos);
+
+				// 대충 도착했으면 종료해준다
+				float dist = FVector::Distance(pos, RightHand->GetComponentLocation());
+				if (dist < 10)
+				{
+					GrabbedObject->SetWorldLocation(RightHand->GetComponentLocation());
+					GetWorldTimerManager().ClearTimer(GrabHandle);
+
+					// grab 초기값 설정
+					PrePos = RightHand->GetComponentLocation();
+					PreRot = RightHand->GetComponentQuat();
+				}
+
+			};
+		GetWorldTimerManager().SetTimer(GrabHandle, FTimerDelegate::CreateLambda(remoteGrabFunc), 0.02f, true);
+	}
+}
+
+void AVRPlayer::DrawDebugRemoteGrab()
+{
+	if(bIsRemoteGrab == false || bIsDrawDebugRemoteGrab == false) return;
+
+	// 충돌 체크
+	FCollisionQueryParams params;
+	params.AddIgnoredActor(this);
+	params.AddIgnoredComponent(RightHand);
+
+	FVector handPos = RightAim->GetComponentLocation();
+	FVector endPos = handPos + RightAim->GetForwardVector() * 2000;
+
+	FHitResult hitResult;
+	bool bHit = GetWorld()->SweepSingleByChannel(hitResult, handPos, endPos, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(20), params);
+
+	DrawDebugSphere(GetWorld(), handPos, 20, 20, FColor::Cyan);
+	if(bHit) DrawDebugSphere(GetWorld(), hitResult.Location, 20, 20, FColor::Cyan);
 }

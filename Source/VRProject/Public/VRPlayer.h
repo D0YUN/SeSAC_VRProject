@@ -182,6 +182,42 @@ public:
 
 	// 물체를 잡은 상태로 컨트롤하기
 	void Grabbing();
+
+	// 이전 위치
+	FVector PrePos;
+
+	// 이전 회전
+	FQuat PreRot;
+
+	// 던질 때 가할 힘
+	UPROPERTY(EditAnywhere, Category = "Grab")
+	float ThrowPower = 500;
+
+	// 회전 속도 (회전 힘)
+	UPROPERTY(EditAnywhere, Category = "Grab")
+	float ToquePower = 500;
+
+	// 던질 방향
+	FVector ThrowDirection;
+
+	// 회전할 방향
+	FQuat DeltaRotation;
+
+	// 원거리 물체 잡기
+public:
+	UPROPERTY(EditDefaultsOnly, Category = "Grab")
+	bool bIsRemoteGrab = true;
+
+	// UFUNCTION(Exec) : 함수에 이 매크로 붙이면 콘솔에서 제어 가능
+	FTimerHandle GrabHandle;
+
+	// 원거리 물체 잡기 함수
+	void RemoteGrab();
+
+	// 원거리 시각화 여부
+	UPROPERTY(EditAnywhere, Category = "Grab")
+	bool bIsDrawDebugRemoteGrab = true;
+	void DrawDebugRemoteGrab();
 };
 
 /* meta = (AllowPrivateAccess=true)
