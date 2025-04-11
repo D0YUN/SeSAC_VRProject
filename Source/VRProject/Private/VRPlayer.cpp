@@ -12,6 +12,8 @@
 #include "../../../../../../../Source/Runtime/Engine/Public/TimerManager.h"
 #include "../../../../../../../Source/Runtime/Engine/Classes/Camera/CameraComponent.h"
 #include "HeadMountedDisplayFunctionLibrary.h"
+#include "../../../../../../../Source/Runtime/Engine/Classes/Haptics/HapticFeedbackEffect_Curve.h"
+#include "../../../../../../../Source/Runtime/UMG/Public/Components/WidgetInteractionComponent.h"
 
 
 // 정적 로딩 - 컴파일 시 로딩
@@ -66,6 +68,7 @@ AVRPlayer::AVRPlayer()
 	TeleportCircle = CreateDefaultSubobject<UNiagaraComponent>(TEXT("TeleportCircle"));
 	TeleportCircle->SetupAttachment(RootComponent);
 
+
 	/* Teleport UI Component */
 	TeleportUIComponent = CreateDefaultSubobject<UNiagaraComponent>(TEXT("TeleportUIComponent"));
 	TeleportUIComponent->SetupAttachment(RootComponent);
@@ -73,11 +76,21 @@ AVRPlayer::AVRPlayer()
 	// TIPS) string 데이터를 int형으로 바꾼 게 FName -> 그래서 FString이 FName보다 빠르다
 	// 해시키 형태로 저장 - Look Up table
 
+
 	/* Crosshair */
 	CrosshairComp = CreateDefaultSubobject<UChildActorComponent>(TEXT("CrosshairComp"));
 	CrosshairComp->SetupAttachment(RootComponent);
 	ConstructorHelpers::FClassFinder<AActor> tmpCrosshair(TEXT("/Script/Engine.Blueprint'/Game/Blueprints/BP_Crosshair.BP_Crosshair'_C"));
 	if(tmpCrosshair.Succeeded()) CrosshairComp->SetChildActorClass(tmpCrosshair.Class);
+
+
+	/* Haptic */
+	ConstructorHelpers::FObjectFinder<UHapticFeedbackEffect_Curve> tmpHaptic(TEXT("/Script/Engine.HapticFeedbackEffect_Curve'/Game/Haptics/HF_Fire.HF_Fire'"));
+	if(tmpHaptic.Succeeded()) FireHaptic = tmpHaptic.Object;
+
+	/* UI */
+	WidgetInteractionComp = CreateDefaultSubobject<UWidgetInteractionComponent>(TEXT("WidgetInteractionComp"));
+	WidgetInteractionComp->SetupAttachment(RightAim);
 }
 
 
@@ -138,6 +151,7 @@ void AVRPlayer::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 		if (ss)
 		{
 			ss->AddMappingContext(IMC_VRInput, 1);
+			ss->AddMappingContext(IMC_Hand, 2);
 		}
 	}
 
@@ -153,6 +167,7 @@ void AVRPlayer::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 
 		// Fire
 		inputSystem->BindAction(IA_VRFire, ETriggerEvent::Started, this, &AVRPlayer::FireInput);
+		inputSystem->BindAction(IA_VRFire, ETriggerEvent::Completed, this, &AVRPlayer::ReleaseUIInput);
 
 		// Grab
 		inputSystem->BindAction(IA_VRGrab, ETriggerEvent::Started, this, &AVRPlayer::TryGrab);
@@ -426,6 +441,16 @@ void AVRPlayer::DoWarp()
 
 void AVRPlayer::FireInput(const FInputActionValue& InValues)
 {
+	// UI Interaction
+	if (WidgetInteractionComp)
+	{
+		WidgetInteractionComp->PressPointerKey(EKeys::LeftMouseButton);
+	}
+
+	// Haptic 재생
+	auto pc = GetWorld()->GetFirstPlayerController();
+	if (pc) pc->PlayHapticEffect(FireHaptic, EControllerHand::Right);
+
 	FVector startPos = RightAim->GetComponentLocation();
 	FVector endPos = startPos + RightAim->GetForwardVector() * 100;
 	FHitResult hitInfo;
@@ -709,4 +734,9 @@ void AVRPlayer::DrawDebugRemoteGrab()
 
 	DrawDebugSphere(GetWorld(), handPos, 20, 20, FColor::Cyan);
 	if(bHit) DrawDebugSphere(GetWorld(), hitResult.Location, 20, 20, FColor::Cyan);
+}
+
+void AVRPlayer::ReleaseUIInput(const struct FInputActionValue& InValues)
+{
+	WidgetInteractionComp->ReleasePointerKey(EKeys::LeftMouseButton);
 }

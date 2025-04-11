@@ -218,6 +218,22 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Grab")
 	bool bIsDrawDebugRemoteGrab = true;
 	void DrawDebugRemoteGrab();
+
+	// haptic (Áøµ¿)
+public:
+	UPROPERTY(EditAnywhere, Category = "Haptic")
+	class UHapticFeedbackEffect_Curve* FireHaptic;
+
+	// UI
+public:
+	UPROPERTY(VisibleAnywhere, Category = "Widget")
+	class UWidgetInteractionComponent* WidgetInteractionComp;
+
+	void ReleaseUIInput(const struct FInputActionValue& InValues);
+
+	// Hand Animation
+	UPROPERTY(EditDefaultsOnly, Category = "Input")
+	class UInputMappingContext* IMC_Hand;
 };
 
 /* meta = (AllowPrivateAccess=true)
